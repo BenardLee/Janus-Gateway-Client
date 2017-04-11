@@ -1,0 +1,90 @@
+<html>
+<head></head>
+<body>
+<audio id="useraudio" autoplay icontrols="true"/>
+<script type="text/javascript" src="/janus_protocol.js"></script>
+<script type="text/javascript">
+	let audio=document.getElementById('useraudio');
+	let media_constraints={
+	        "audio":true,
+		"video":false
+	};
+	let pc_constraints={
+		"mandatory":{"OfferToReceiveAudio":true,"OfferToReceiveVideo":false},
+		"optional":[{"DtlsSrtpKeyAgreement":true}]
+	};
+	let ice={
+		iceServers:[ {url:"stun:stun.l.google.com:19302"} ]
+	};
+	let server_addr="wss://"+window.location.hostname+"/janus";
+	let plugin_name="janus.plugin.audiobridge";
+
+	//connect websocket server
+	console.log('1. connect websocket server addr:'+server_addr);
+	jwsp.connect(server_addr).then(()=>{
+		console.log('2. create session_id');
+		jwsp.create_session().then(()=>{
+			console.log('3. attach plugin');
+			jwsp.attach_plugin(plugin_name,plugin_name+jwsp.trxid()).then(()=>{
+				console.log('4. attach '+plugin_name+' success. start_keepalive');
+				jwsp.start_keepalive();
+				console.log('5. join room '+plugin_name);
+				jwsp.plugin.audiobridge.join({room:5555}).then(()=>{
+					console.log('6. join room '+plugin_name+' success. getUserMedia');
+					navigator.mediaDevices.getUserMedia(media_constraints).then(gotStream).catch((err)=>{
+						console.log('getUserMedia Error:'+err.stack);
+					})
+				}).catch((err)=>{
+					console.log('join room '+plugin_name+' fail. msg:'+err);
+				});
+			}).catch((err)=>{
+				console.log('attach '+plugin_name+' fail. msg');
+			});
+		}).catch((err)=>{
+			console.log('create_session fail. msg:'+err);
+		});
+	}).catch((err)=>{
+		console.log('WebSocket Connect Fail Msg:'+err.stack);
+	});
+
+	function gotStream(stream){
+		console.log('7. Creating PeerConnection');
+		let pc=new webkitRTCPeerConnection(ice);
+		pc.onicecandidate=function(evt){
+			if(evt.candidate){
+				console.log("99. local icecandidate:"+evt.candidate.candidate);
+				jwsp.tricle(evt.candidate,plugin_name);
+			};
+		};
+		pc.onaddstream=(remoteStream)=>{
+			let stream=pc.getRemoteStreams()[0];
+			let url = stream ? URL.createObjectURL(stream) : '';
+			audio.src=url;
+			console.log('Add Remote Stream URL:',url);
+		}
+		pc.addStream(stream);
+		pc.createOffer(pc_constraints).then((offer)=>{
+			console.log('8. Created SDP offer');
+			return pc.setLocalDescription(offer);
+		}).then(()=>{
+			let localDescription = pc.localDescription;
+			jwsp.plugin.audiobridge.configure(localDescription).then((parsed)=>{
+				if(parsed.plugindata.data.result==='ok') {
+					console.log('9. offer success and answer received');
+					pc.setRemoteDescription(parsed.jsep,()=>{
+						console.log('10. Set Remove Description Success');
+					});
+				} else {
+					console.log('offer success but answer fail');
+				}
+			}).catch((err)=>{
+				console.log('offer error : '+err.reason);
+			});
+		}).catch((err)=>{
+			console.log(err.stack);
+		});
+	};
+
+</script>
+</body>
+</html>
